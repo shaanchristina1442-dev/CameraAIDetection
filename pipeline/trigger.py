@@ -1,3 +1,20 @@
+"""
+Trigger layer: cheap, fast pass over video using YOLO object detection
+plus simple frame-differencing motion energy.
+ 
+This layer's only job is to answer "is something happening here that
+MIGHT be worth a closer (expensive) look?" It does NOT judge whether
+something is theft, damage, etc. - that's the judgment layer's job.
+ 
+Design choice: we trigger on "person present + high motion energy" or
+"person count changes" as a generic proxy for "an event is occurring".
+A production system would use pose-estimation (hand-to-shelf, hand-to-bag)
+for a far more precise trigger; that's flagged as a future improvement
+in the README rather than built here, since pose-based gesture detection
+needs labeled retail-specific training data to be reliable.
+"""
+
+
 import cv2
 import numpy as np
 import os
@@ -41,3 +58,50 @@ class TriggerEngine:
             })
         
         return detections
+
+    def _motion_energy(self, prev_gray, gray):
+        if prev_gray is None:
+            return 0.0
+        diff = cv2.absdiff(prev_gray, gray)
+        return float(np.sum(diff) / (diff.shape[0] * diff.shape[1] * 255))
+    def scan_video(self, video_path: str) -> list[Ttigger_Event]:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video file: {video_path}")
+
+        fps = cap.get(cv2.CAP_PROP_FPD)
+        prev_gray = None
+        events = []
+        current_event = None
+        frame_count = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            motion_energy = self._motion_energy(prev_gray, gray)
+            prev_gray = gray
+
+            detections = self._detect_objects(frame)
+            person_count = sum(1 for d in detections if d["class_name"] == "person")
+
+            if (person_count >= self.class_names and motion_energy >= self,motion_threshold) or (current_event and person_count != current_event.person_count_at_peak):
+                if current_event is None:
+                    current_event = TriggerEvent(
+                        start_frame=frame_count,
+                        end_frame=frame_count,
+                        start_time_sec=frame_count / fps,
+                        end_time_sec=frame_count / fps,
+                        peak_motion=motion_energy,
+                        person_count_at_peak=person_count,
+                        reason="person present + high motion energy" if motion_energy >= self.motion_threshold else "person count change",
+                        sampled_frames=[frame]
+                    )
+                else:
+                    current_event.end_frame = frame_count
+                    current_event.end_time_sec = frame_count / fps
+                    current_event.peak_motion = max(current_event.peak_motion, motion_energy)
+                    current_event.person_count_at_peak = max(current_event.person_count_at_peak, person_count)
+                    current_event.sampled_frames.append(frame)
+                
