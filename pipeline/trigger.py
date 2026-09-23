@@ -104,4 +104,47 @@ class TriggerEngine:
                     current_event.peak_motion = max(current_event.peak_motion, motion_energy)
                     current_event.person_count_at_peak = max(current_event.person_count_at_peak, person_count)
                     current_event.sampled_frames.append(frame)
-                
+            frame_count += 1
+
+        if current_event:
+            events.append(current_event)
+        cap.release()
+        return events
+
+    def find_issues(self, events: list[TriggerEvent]) -> list[str]:
+        issues = []
+        for event in events:
+            if event.peak_motion < self.motion_threshold:
+                issues.append(f"Event with low peak motion: {event.start_time_sec}s - {event.end_time_sec}s")
+            if event.person_count_at_peak == 0:
+                issues.append(f"Event with no persons detected: {event.start_time_sec}s - {event.end_time_sec}s")
+        return issues
+
+    def define_issues(self, events: list[TriggerEvent]) -> list[str]:
+        issues = []
+        if not issues:
+            issues.append("No issues found on monitor")
+        else:
+            issues.append("Issues found on monitor")
+            print(issues)
+        return issues
+        print(define_issues)
+        return issues
+
+    def camera_results(self, events, issues: list[str]) -> None:
+        print("Events:")
+        for event in events:
+            print(
+                f"Start: {event.start_time_sec}s, End: {event.end_time_sec}s, "
+                f"Peak Motion: {event.peak_motion}, "
+                f"Person Count at Peak: {event.person_count_at_peak}"
+            )
+            print(f'Issue: {issues}')
+        print("Camera results displayed.")
+        print("Issues:")
+        for issue in issues:
+            print(f"- {issue}")
+        return issues
+        return issue
+    
+
