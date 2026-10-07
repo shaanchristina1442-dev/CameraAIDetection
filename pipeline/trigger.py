@@ -36,10 +36,12 @@ class TriggerEvent:
     sampled_frames: list[np.ndarray]
 
 class TriggerEngine:
-    def __init__(self, model_path: str = "yOLOv8n.pt", motion_threshold: float = 0.02, person_count_threshold: int = 1):
+    def __init__(self, model_path: str = "yolov8n.pt", motion_threshold: float = 0.02, person_count_threshold: int = 1):
         print(f"Loading YOLO model from {model_path}...")
         self.model = YOLO(model_path)
         self.class_names = self.model.names
+        self.motion_threshold = motion_threshold
+        self.person_count_threshold = person_count_threshold
 
     def _detect_objects(self, frame):
         results = self.model.predict(
@@ -64,13 +66,14 @@ class TriggerEngine:
             return 0.0
         diff = cv2.absdiff(prev_gray, gray)
         return float(np.sum(diff) / (diff.shape[0] * diff.shape[1] * 255))
-    def scan_video(self, video_path: str) -> list[Ttigger_Event]:
+    def scan_video(self, video_path: str) -> list[TriggerEvent]:
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise ValueError(f"Could not open video file: {video_path}")
 
-        fps = cap.get(cv2.CAP_PROP_FPD)
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         prev_gray = None
+        prev_person_count = 0
         events = []
         current_event = None
         frame_count = 0
@@ -86,7 +89,7 @@ class TriggerEngine:
             detections = self._detect_objects(frame)
             person_count = sum(1 for d in detections if d["class_name"] == "person")
 
-            if (person_count >= self.class_names and motion_energy >= self,motion_threshold) or (current_event and person_count != current_event.person_count_at_peak):
+            if (person_count >= self.person_count_threshold and motion_energy >= self.motion_threshold) or (current_event and person_count != prev_person_count):
                 if current_event is None:
                     current_event = TriggerEvent(
                         start_frame=frame_count,
@@ -104,6 +107,11 @@ class TriggerEngine:
                     current_event.peak_motion = max(current_event.peak_motion, motion_energy)
                     current_event.person_count_at_peak = max(current_event.person_count_at_peak, person_count)
                     current_event.sampled_frames.append(frame)
+            elif current_event is not None:
+                # activity stopped: close this event so the next one starts fresh
+                events.append(current_event)
+                current_event = None
+            prev_person_count = person_count
             frame_count += 1
 
         if current_event:
@@ -130,7 +138,9 @@ class TriggerEngine:
         return issues
         print(define_issues)
         return issues
-
+    def recognize_face(self, frame) -> list[str]:
+        return []  # TODO: not implemented yet
+            
     def camera_results(self, events, issues: list[str]) -> None:
         print("Events:")
         for event in events:
