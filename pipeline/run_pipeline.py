@@ -1,10 +1,17 @@
+"""
+Orchestrates one clip end to end: trigger scan -> Claude judgment -> events.jsonl.
 
+Usage:
+    python -m pipeline.run_pipeline <video_path> [--dry-run]
+
+--dry-run runs only the YOLO trigger layer (no Claude calls, nothing logged),
+which is the cheap way to tune thresholds on new store footage.
+"""
 import os
 import sys
 import cv2
 import json
 import time
-import anthropic
 
 
 from . import config
@@ -15,91 +22,103 @@ from .judge import judge_event
 def ensure_dirs():
     os.makedirs(config.CLIPS_DIR, exist_ok=True)
 
+def sample_frames(frames, n):
+    """Pick n frames spread evenly across the event."""
+    if len(frames) <= n:
+        return frames
+    step = len(frames) / n
+    return [frames[int(i * step)] for i in range(n)]
+
 def save_event_frames(event_id:str, frames)-> list[str]:
+    """Save frames as JPEGs; returns paths relative to EVENTS_DIR for the dashboard."""
     paths = []
     for i, frame in enumerate(frames):
-        path = os.path.join(config.CLIPS_DIR, f"{event_id}_frame{i}.jpg")
-        cv2.imwrite(path, frame)
-        paths.append(path)
+        name = f"{event_id}_frame{i}.jpg"
+        cv2.imwrite(os.path.join(config.CLIPS_DIR, name), frame)
+        paths.append(f"clips/{name}")
     return paths
 
 def append_event_log(record: dict):
     with open(config.EVENTS_LOG, "a") as f:
         f.write(json.dumps(record) + "\n")
 
-def run(video_path: str):
+def is_alert(judgment: dict) -> bool:
+    return (judgment.get("category") != "nothing_notable"
+            and judgment.get("confidence", 0.0) >= config.ALERT_CONFIDENCE_FLOOR)
+
+def fmt_time(sec: float) -> str:
+    return time.strftime("%H:%M:%S", time.gmtime(sec))
+
+def run(video_path: str, engine: TriggerEngine | None = None, dry_run: bool = False):
     ensure_dirs()
 
     if not os.path.exists(config.EVENTS_LOG):
         open(config.EVENTS_LOG, "w").close()
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    if not dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
+        sys.exit("[pipeline] ANTHROPIC_API_KEY is not set. Add it to .env or use --dry-run.")
 
-    engine = TriggerEngine()
-    print(f"[pipeline] scanning {video_path} for candidate events")
+    engine = engine or TriggerEngine()
+    video_name = os.path.basename(video_path)
+    print(f"[pipeline] scanning {video_name} for candidate events")
 
     trigger_events = engine.scan_video(video_path)
 
     if not trigger_events:
-        print("[pipeline] no candidate events found. Try lowering the threshold")
+        print("[pipeline] no candidate events found. Try lowering MOTION_THRESHOLD in config.py")
         return trigger_events
+
+    print(f"[pipeline] {len(trigger_events)} candidate event(s) found")
 
     for idx, event in enumerate(trigger_events):
         event_id = f"{int(time.time())}_{idx}"
-        print(f"[pipeline] processing event {event_id} - {event['start_time']} to {event['end_time']}")
+        print(f"[pipeline] event {idx + 1}: {fmt_time(event.start_time_sec)} - {fmt_time(event.end_time_sec)} "
+              f"({event.reason}, {event.person_count_at_peak} people, motion {event.peak_motion:.3f})")
 
-        print(f"({event.get('reason', '')})")
+        if dry_run:
+            continue
 
-        frames = engine.extract_event_frames(video_path, event, config.FRAMES_PER_EVENT)
-        frame_path = save_event_frames(event_id, frames)
+        frames = sample_frames(event.sampled_frames, config.FRAMES_PER_JUDGMENT)
+        frame_paths = save_event_frames(event_id, frames)
 
         print(f"[pipeline]   -> sending {len(frames)} frames to Claude for judgment...")
-        judgment = judge_event(frames, client)
+        judgment = judge_event(frames, event.reason)
 
+        alert = is_alert(judgment)
         record = {
             "event_id": event_id,
-            "start_time": event["start_time"],
-            "end_time": event["end_time"],
-            "frames": frame_path,
+            "video": video_name,
+            "start_time": event.start_time_sec,
+            "end_time": event.end_time_sec,
+            "frames": frame_paths,
             "judgment": judgment,
-            "peak_motion": event["peak_motion"],
-            "trigger_engine": event["trigger_engine"],
+            "peak_motion": event.peak_motion,
+            "person_count": event.person_count_at_peak,
+            "trigger_reason": event.reason,
+            "alert": alert,
             "review": "pending",
-
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         }
-
-        json_record = json.dumps(record, indent=2)
-        print(f"[pipeline]  -> event record:\n{json_record}")
 
         append_event_log(record)
 
         category = judgment.get("category", "unknown")
         confidence = judgment.get("confidence", 0.0)
-        flag = "⚠️" if category == "suspicious" and confidence > 0.8 else ""
-        print(f"[pipeline]  -> judgment: {category} (confidence: {confidence:.2f}) {flag}")
+        flag = "⚠️  ALERT - needs human review" if alert else ""
+        print(f"[pipeline]   -> judgment: {category} (confidence: {confidence:.2f}) {flag}")
+        if "error" in judgment:
+            print(f"[pipeline]   -> judge error: {judgment['error']}: {judgment.get('reasoning', '')}")
 
-        print(f"[pipeline]  -> event record saved to {config.EVENTS_LOG}")
-        print(f"run dashboard to review events: `python -m pipeline.dashboard`")
-
-
-        if category == "suspicious" and confidence > 0.8:
-            print(f"[pipeline]  -> event {event_id} flagged as suspicious. Consider reviewing it.")
+    if not dry_run:
+        print(f"[pipeline] events saved to {config.EVENTS_LOG}")
+        print("[pipeline] review them in the dashboard: python -m dashboard.app")
 
     return trigger_events
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python -m pipeline.run_pipeline <video_path>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    if len(args) != 1:
+        print("Usage: python -m pipeline.run_pipeline <video_path> [--dry-run]")
         sys.exit(1)
-    run(sys.argv[1])
-
-
-
-
-
-
-            
-
+    run(args[0], dry_run="--dry-run" in sys.argv)

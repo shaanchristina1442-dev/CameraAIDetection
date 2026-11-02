@@ -16,7 +16,15 @@ import anthropic
 
 from . import config
 
-client = anthropic.Anthropic()
+_client = None
+
+
+def _get_client():
+    # created on first use so importing this module doesn't require an API key
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic()
+    return _client
 
 
 def _frame_to_base64(frame, max_width=640) -> str:
@@ -46,6 +54,8 @@ not making an accusation, issuing a verdict, or identifying any individual.
 Do not guess at intent or identity. Describe only visible, observable actions.
 If the frames are ambiguous, low quality, or don't show enough to tell,
 say so plainly and lower your confidence accordingly.
+
+Why the motion detector flagged this moment: {context}
 
 Classify the scene into exactly one of these categories:
 {category_lines}
@@ -94,7 +104,7 @@ def judge_event(frames, context):
 
     raw_text = None
     try:
-        response = client.messages.create(
+        response = _get_client().messages.create(
             model=config.CLAUDE_MODEL,
             max_tokens=450,
             messages=[{"role": "user", "content": content}],

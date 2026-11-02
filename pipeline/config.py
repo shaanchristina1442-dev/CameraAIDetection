@@ -7,12 +7,25 @@ autonomous accusation system. It surfaces moments worth a human's
 attention. It does not label anyone a "thief" or take any automated
 action. All outputs should be treated as "worth reviewing", not "confirmed".
 """
+import os
+
+from dotenv import load_dotenv
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Pull ANTHROPIC_API_KEY (and any overrides) from <project>/.env
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
  
 # --- Trigger layer (YOLO) settings ---
  
+# Pretrained YOLO weights (downloaded automatically on first run).
+# yolov8n is fastest; yolov8s/m are more accurate on small, distant people.
+YOLO_MODEL = os.environ.get("YOLO_MODEL", "yolov8n.pt")
+
 # How often to run object detection (every Nth frame). Lower = more
-# sensitive / slower. For a demo on a short clip, 1-3 is fine.
-FRAME_SKIP = 2
+# sensitive / slower. 5 on 30fps store footage = 6 checks per second,
+# which is plenty to catch a person and keeps CPU scanning near real time.
+FRAME_SKIP = int(os.environ.get("FRAME_SKIP", 5))
  
 # Confidence threshold for YOLO person/object detections
 YOLO_CONF_THRESHOLD = 0.45
@@ -22,12 +35,25 @@ YOLO_CONF_THRESHOLD = 0.45
 # others help us reason about hand-near-object events.
 RELEVANT_CLASSES = ["person", "backpack", "handbag", "suitcase", "bottle", "cell phone"]
  
-# Motion energy threshold (0-1 normalized) above which we consider a
-# region "active" and worth a closer look
-MOTION_THRESHOLD = 0.02
+# Motion energy = fraction of the frame (0-1) whose pixels changed by more
+# than MOTION_PIXEL_DELTA (0-255) since the last checked frame. 0.02 means
+# "2% of the picture moved". Raise it if fans/screens/lighting cause false
+# triggers; lower it for wide shots where people look small.
+MOTION_THRESHOLD = float(os.environ.get("MOTION_THRESHOLD", 0.02))
+MOTION_PIXEL_DELTA = 25
+
+# Events shorter than this are dropped as noise (someone walking past)
+MIN_EVENT_SECONDS = 1.0
+
+# Continuous activity longer than this is split into separate events so
+# each one is short enough for Claude (and a reviewer) to judge
+MAX_EVENT_SECONDS = 60
+
+# Upper bound on frames held in memory per event while scanning
+MAX_FRAMES_KEPT_PER_EVENT = 60
  
-# Minimum seconds between two triggered clips to avoid spamming the
-# judgment layer with near-duplicate events
+# An event only ends after this many seconds of no activity, so a short
+# pause doesn't split one moment into several near-duplicate events
 MIN_SECONDS_BETWEEN_EVENTS = 4
  
 # How many seconds of context to grab around a trigger (before/after)
@@ -85,6 +111,10 @@ ALERT_CONFIDENCE_FLOOR = 0.5
  
  
 # --- Storage ---
-EVENTS_DIR = "events"
-CLIPS_DIR = "events/clips"
-EVENTS_LOG = "events/events.jsonl"
+EVENTS_DIR = os.path.join(PROJECT_ROOT, "events")
+CLIPS_DIR = os.path.join(EVENTS_DIR, "clips")
+EVENTS_LOG = os.path.join(EVENTS_DIR, "events.jsonl")
+
+# Drop store footage here while pipeline.watcher is running
+FOOTAGE_DIR = os.path.join(PROJECT_ROOT, "footage")
+VIDEO_EXTENSIONS = (".mp4", ".avi", ".mov", ".mkv", ".m4v")

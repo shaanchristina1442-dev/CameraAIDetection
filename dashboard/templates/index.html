@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Store Monitor</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --text: #1d2330; --muted: #677085; --border: #e2e5ea;
+    --alert: #c2410c; --alert-bg: #fff4ed; --ok: #15803d; --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --card: #1b1f27; --text: #e6e8ec; --muted: #9aa3b2; --border: #2c323d;
+      --alert: #fb923c; --alert-bg: #2a1d14; --ok: #4ade80; --accent: #60a5fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  h1 { font-size: 18px; margin: 0; }
+  .note { color: var(--muted); font-size: 13px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+  .controls button { border: 1px solid var(--border); background: var(--card); color: var(--text); padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+  .controls button.active { border-color: var(--accent); color: var(--accent); }
+  main { max-width: 1100px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+  .stats { display: flex; gap: 16px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+  .stats b { color: var(--text); }
+  .event { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .event.alert { border-left: 4px solid var(--alert); }
+  .top { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; justify-content: space-between; }
+  .cat { font-weight: 600; }
+  .alert .cat { color: var(--alert); }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 99px; background: var(--bg); color: var(--muted); }
+  .badge.alert { background: var(--alert-bg); color: var(--alert); }
+  .meta { color: var(--muted); font-size: 13px; margin: 4px 0 12px; }
+  .frames { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+  .frames img { height: 120px; border-radius: 6px; border: 1px solid var(--border); cursor: zoom-in; }
+  .desc { margin: 12px 0 4px; }
+  .why { color: var(--muted); font-size: 14px; margin: 0; }
+  .error { color: var(--alert); font-size: 13px; }
+  .review { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .review button { border: 1px solid var(--border); background: transparent; color: var(--text); padding: 4px 10px; border-radius: 6px; cursor: pointer; }
+  .review .state { font-size: 13px; color: var(--muted); }
+  .review .state.confirmed { color: var(--alert); }
+  .review .state.dismissed { color: var(--ok); }
+  .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
+  .empty code { background: var(--card); padding: 2px 6px; border-radius: 4px; }
+  #zoom { position: fixed; inset: 0; background: rgba(0,0,0,.85); display: none; align-items: center; justify-content: center; cursor: zoom-out; }
+  #zoom img { max-width: 95vw; max-height: 95vh; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Store Monitor</h1>
+    <div class="note">AI-flagged moments for human review. These are not confirmed incidents.</div>
+  </div>
+  <div class="controls">
+    <button data-filter="alerts" class="active">Alerts</button>
+    <button data-filter="pending">Unreviewed</button>
+    <button data-filter="all">All events</button>
+  </div>
+</header>
+<main>
+  <div class="stats" id="stats"></div>
+  <div id="events"></div>
+</main>
+<div id="zoom"><img alt=""></div>
+
+<script>
+const LABELS = {
+  theft_concealment: "Possible concealment",
+  item_removal_no_transaction: "Item removed without transaction",
+  property_damage: "Property damage",
+  altercation_or_aggression: "Altercation / aggression",
+  employee_unauthorized_giveaway: "Employee giveaway",
+  employee_policy_violation: "Employee policy issue",
+  nothing_notable: "Nothing notable",
+};
+let filter = "alerts";
+let events = [];
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const clock = sec => new Date((sec || 0) * 1000).toISOString().substr(11, 8);
+
+function render() {
+  const shown = events.filter(e =>
+    filter === "all" ? true : filter === "alerts" ? e.alert : e.review === "pending");
+
+  const alerts = events.filter(e => e.alert).length;
+  const pending = events.filter(e => e.alert && e.review === "pending").length;
+  document.getElementById("stats").innerHTML =
+    `<span><b>${events.length}</b> events</span><span><b>${alerts}</b> alerts</span><span><b>${pending}</b> alerts awaiting review</span>`;
+
+  const box = document.getElementById("events");
+  if (!shown.length) {
+    box.innerHTML = events.length
+      ? `<div class="empty">Nothing in this view.</div>`
+      : `<div class="empty">No events yet. Run <code>python -m pipeline.run_pipeline footage/your_clip.mp4</code><br>or start <code>python -m pipeline.watcher</code> and drop footage into <code>footage/</code>.</div>`;
+    return;
+  }
+
+  box.innerHTML = shown.map(e => {
+    const j = e.judgment || {};
+    const conf = Math.round((j.confidence || 0) * 100);
+    return `
+    <article class="event ${e.alert ? "alert" : ""}">
+      <div class="top">
+        <span class="cat">${esc(LABELS[j.category] || j.category || "Unknown")}</span>
+        <span class="badge ${e.alert ? "alert" : ""}">${conf}% confidence</span>
+      </div>
+      <div class="meta">${esc(e.video || "")} · ${clock(e.start_time)} – ${clock(e.end_time)} · ${e.person_count ?? "?"} people · ${esc(e.trigger_reason || "")} · processed ${esc(e.created_at)}</div>
+      <div class="frames">${(e.frames || []).map(f => `<img src="/frames/${esc(f)}" loading="lazy" alt="event frame">`).join("")}</div>
+      <p class="desc">${esc(j.visible_description)}</p>
+      <p class="why">${esc(j.reasoning)}</p>
+      ${j.error ? `<p class="error">Judge error: ${esc(j.error)}</p>` : ""}
+      <div class="review">
+        <span class="state ${esc(e.review)}">${e.review === "pending" ? "Not reviewed" : e.review === "confirmed" ? "Confirmed by reviewer" : "Dismissed by reviewer"}</span>
+        <button onclick="review('${esc(e.event_id)}','confirmed')">Confirm</button>
+        <button onclick="review('${esc(e.event_id)}','dismissed')">Dismiss</button>
+        ${e.review !== "pending" ? `<button onclick="review('${esc(e.event_id)}','pending')">Undo</button>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+}
+
+async function load() {
+  try {
+    events = await (await fetch("/api/events")).json();
+    render();
+  } catch (err) { console.error(err); }
+}
+
+async function review(id, status) {
+  await fetch(`/api/events/${encodeURIComponent(id)}/review`, {
+    method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({status}),
+  });
+  load();
+}
+
+document.querySelectorAll("[data-filter]").forEach(b => b.onclick = () => {
+  filter = b.dataset.filter;
+  document.querySelectorAll("[data-filter]").forEach(x => x.classList.toggle("active", x === b));
+  render();
+});
+
+const zoom = document.getElementById("zoom");
+document.addEventListener("click", ev => {
+  if (ev.target.matches(".frames img")) { zoom.querySelector("img").src = ev.target.src; zoom.style.display = "flex"; }
+  else if (ev.target.closest("#zoom")) zoom.style.display = "none";
+});
+
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>
