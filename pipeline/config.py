@@ -66,7 +66,7 @@ FRAMES_PER_JUDGMENT = 5
  
 # --- Judgment layer (Claude vision) settings ---
  
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-opus-5.5"
  
 # The categories we ask Claude to classify flagged events into.
 # Keep this list as the single source of truth - the prompt builder
