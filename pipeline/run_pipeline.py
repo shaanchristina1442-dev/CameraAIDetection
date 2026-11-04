@@ -16,18 +16,26 @@ import time
 
 from . import config
 from .trigger import TriggerEngine
-from .judge import judge_event
+from .judge import judge_event, crop_to_people
 
 
 def ensure_dirs():
     os.makedirs(config.CLIPS_DIR, exist_ok=True)
 
-def sample_frames(frames, n):
-    """Pick n frames spread evenly across the event."""
+def sample_frames(frames, boxes, n):
+    """
+    Pick n frames spread evenly across the event, with their person boxes.
+
+    Frames and boxes are returned index-aligned: the judgment layer crops
+    each frame using its own boxes, so they must not drift apart here.
+    """
     if len(frames) <= n:
-        return frames
-    step = len(frames) / n
-    return [frames[int(i * step)] for i in range(n)]
+        picked = list(range(len(frames)))
+    else:
+        step = len(frames) / n
+        picked = [int(i * step) for i in range(n)]
+    return ([frames[i] for i in picked],
+            [boxes[i] if i < len(boxes) else [] for i in picked])
 
 def save_event_frames(event_id:str, frames)-> list[str]:
     """Save frames as JPEGs; returns paths relative to EVENTS_DIR for the dashboard."""
@@ -78,10 +86,16 @@ def run(video_path: str, engine: TriggerEngine | None = None, dry_run: bool = Fa
         if dry_run:
             continue
 
-        frames = sample_frames(event.sampled_frames, config.FRAMES_PER_JUDGMENT)
+        frames, boxes = sample_frames(event.sampled_frames, event.sampled_boxes,
+                                      config.FRAMES_PER_JUDGMENT)
+        # crop before saving, so what the dashboard shows a reviewer is exactly
+        # what the model was given - the frames are the evidence for its answer
+        frames = [crop_to_people(f, b) for f, b in zip(frames, boxes)]
         frame_paths = save_event_frames(event_id, frames)
 
-        print(f"[pipeline]   -> sending {len(frames)} frames to Claude for judgment...")
+        cropped = sum(1 for f, b in zip(frames, boxes) if b)
+        print(f"[pipeline]   -> sending {len(frames)} frames to Claude "
+              f"({cropped} cropped to people) for judgment...")
         judgment = judge_event(frames, event.reason)
 
         alert = is_alert(judgment)
