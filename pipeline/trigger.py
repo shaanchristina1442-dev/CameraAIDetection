@@ -33,6 +33,9 @@ class TriggerEvent:
     person_count_at_peak: int
     reason: str
     sampled_frames: list[np.ndarray]
+    # person bounding boxes for each kept frame, index-aligned with
+    # sampled_frames, so the judgment layer can crop to where people are
+    sampled_boxes: list[list[tuple]]
 
 class TriggerEngine:
     def __init__(self, model_path: str = config.YOLO_MODEL, motion_threshold: float = config.MOTION_THRESHOLD, person_count_threshold: int = 1):
@@ -122,6 +125,7 @@ class TriggerEngine:
 
             detections = self._detect_objects(frame)
             person_count = sum(1 for d in detections if d["class_name"] == "person")
+            person_boxes = [d["bbox"] for d in detections if d["class_name"] == "person"]
 
             if (person_count >= self.person_count_threshold and motion_energy >= self.motion_threshold) or (current_event and person_count != prev_person_count):
                 last_active_frame = frame_count
@@ -135,7 +139,8 @@ class TriggerEngine:
                         peak_motion=motion_energy,
                         person_count_at_peak=person_count,
                         reason="person present + high motion energy" if motion_energy >= self.motion_threshold else "person count change",
-                        sampled_frames=[frame]
+                        sampled_frames=[frame],
+                        sampled_boxes=[person_boxes]
                     )
                 else:
                     current_event.end_frame = frame_count
@@ -145,9 +150,11 @@ class TriggerEngine:
                     active_ticks += 1
                     if active_ticks % keep_stride == 0:
                         current_event.sampled_frames.append(frame)
+                        current_event.sampled_boxes.append(person_boxes)
                     # cap memory on long events: drop every other frame and keep half as often from now on
                     if len(current_event.sampled_frames) > config.MAX_FRAMES_KEPT_PER_EVENT:
                         current_event.sampled_frames = current_event.sampled_frames[::2]
+                        current_event.sampled_boxes = current_event.sampled_boxes[::2]
                         keep_stride *= 2
                     # split very long activity (e.g. a cashier always in view) into reviewable chunks
                     if current_event.end_frame - current_event.start_frame >= max_event_frames:

@@ -66,7 +66,38 @@ FRAMES_PER_JUDGMENT = 5
  
 # --- Judgment layer (Claude vision) settings ---
  
-CLAUDE_MODEL = "claude-sonnet-4-6"
+CLAUDE_MODEL = "claude-opus-5-5"
+
+# Thinking is always on for this model and shares the response budget, so
+# max_tokens must leave room for it or the JSON comes back truncated. This is
+# a cap, not a spend: unused budget costs nothing, so it is set generously.
+JUDGE_MAX_TOKENS = 3000
+
+# How hard the model thinks before answering: low | medium | high | xhigh | max.
+# This model defaults to "medium", so it is set explicitly. "low" suits a
+# 7-way classification; raise it if ambiguous frames are being mislabelled,
+# and re-measure against benchmarks/ rather than guessing.
+JUDGE_EFFORT = "low"
+
+
+# --- Frame cropping (what the judgment layer actually sees) ---
+
+# Send a crop around the detected people instead of the whole downscaled frame.
+# On a wide store shot a person is a small part of the picture, and the detail
+# that decides the category (a hand entering a pocket) is a few pixels. YOLO
+# already knows where the people are, so spend the resolution there.
+CROP_TO_PEOPLE = True
+
+# Padding around the people, as a fraction of the box size. Context matters:
+# the shelf being reached into is outside the person's own bounding box.
+CROP_PADDING = 0.35
+
+# Never send a crop smaller than this fraction of the frame; a tiny sliver
+# loses the surroundings a reviewer needs to make sense of the scene.
+CROP_MIN_FRACTION = 0.25
+
+# If the people already fill this much of the frame, cropping gains nothing.
+CROP_SKIP_ABOVE = 0.8
  
 # The categories we ask Claude to classify flagged events into.
 # Keep this list as the single source of truth - the prompt builder
