@@ -6,3 +6,6 @@ __pycache__/
 footage/
 events/clips/
 events/reviews.json
+# pipeline output: regenerated on every run, and a guaranteed
+# merge conflict whenever two people run the pipeline
+events/events.jsonl

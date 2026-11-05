@@ -4,8 +4,9 @@ checked without running YOLO or calling Claude.
 
 Usage:
     python sample_clips/seed_mock_events.py          # append mock events
-    python sample_clips/seed_mock_events.py --clear  # remove previous mock events first
+    python sample_clips/seed_mock_events.py --clear  # remove mock events and exit
 """
+import glob
 import json
 import os
 import sys
@@ -43,11 +44,22 @@ def placeholder_frame(label: str, i: int):
 def main():
     os.makedirs(config.CLIPS_DIR, exist_ok=True)
 
-    if "--clear" in sys.argv and os.path.exists(config.EVENTS_LOG):
-        with open(config.EVENTS_LOG) as f:
-            keep = [line for line in f if '"mock": true' not in line]
-        with open(config.EVENTS_LOG, "w") as f:
-            f.writelines(keep)
+    if "--clear" in sys.argv:
+        # remove and stop. Previously this stripped the old mock rows and then
+        # fell through to the append below, re-seeding them with new timestamps,
+        # so it looked like clearing had done nothing.
+        removed = 0
+        if os.path.exists(config.EVENTS_LOG):
+            with open(config.EVENTS_LOG) as f:
+                lines = f.readlines()
+            keep = [line for line in lines if '"mock": true' not in line]
+            removed = len(lines) - len(keep)
+            with open(config.EVENTS_LOG, "w") as f:
+                f.writelines(keep)
+        for path in glob.glob(os.path.join(config.CLIPS_DIR, "mock_*.jpg")):
+            os.remove(path)
+        print(f"removed {removed} mock event(s) and their frames")
+        return
 
     now = int(time.time())
     with open(config.EVENTS_LOG, "a") as log:
