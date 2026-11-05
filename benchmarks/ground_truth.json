@@ -1,0 +1,26 @@
+{
+  "browsing.mov": {
+    "caveats": [
+      "camera handheld - motion energy unusable",
+      "hand covers lens at end"
+    ],
+    "expect_event": true,
+    "expected_category": "nothing_notable",
+    "instruction": "Pick an item up, examine it, put it back.",
+    "seconds": 7.0,
+    "source": "IMG_0035.MOV, phone, handheld"
+  },
+  "concealment_pocket.mov": {
+    "caveats": [
+      "camera handheld - motion energy unusable",
+      "hand covers lens at end",
+      "item was carried openly, not concealed - clip does not depict the labelled action",
+      "non-retail setting (home office); model discounts retail categories"
+    ],
+    "expect_event": true,
+    "expected_category": "theft_concealment",
+    "instruction": "Take an item and conceal it.",
+    "seconds": 7.6,
+    "source": "IMG_0036.MOV, phone, handheld"
+  }
+}
