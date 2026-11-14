@@ -18,10 +18,12 @@ import time
 from . import config
 from .trigger import TriggerEngine
 from .judge import judge_event, crop_to_people
+from storage import repository
 
 
 def ensure_dirs():
     os.makedirs(config.CLIPS_DIR, exist_ok=True)
+    repository.init()
 
 def sample_frames(frames, boxes, n):
     """
@@ -47,9 +49,15 @@ def save_event_frames(event_id:str, frames)-> list[str]:
         paths.append(f"clips/{name}")
     return paths
 
-def append_event_log(record: dict):
-    with open(config.EVENTS_LOG, "a") as f:
-        f.write(json.dumps(record) + "\n")
+def camera_for(video_path: str) -> str:
+    """
+    One camera row per source. For file runs that is the clip; from task M it
+    is the actual camera, and events stay grouped the same way either side.
+    """
+    stem = os.path.splitext(os.path.basename(video_path))[0]
+    camera_id = f"file:{stem}"
+    repository.ensure_camera(camera_id, name=os.path.basename(video_path), source=video_path)
+    return camera_id
 
 def is_alert(judgment: dict) -> bool:
     return (judgment.get("category") != "nothing_notable"
@@ -61,14 +69,12 @@ def fmt_time(sec: float) -> str:
 def run(video_path: str, engine: TriggerEngine | None = None, dry_run: bool = False):
     ensure_dirs()
 
-    if not os.path.exists(config.EVENTS_LOG):
-        open(config.EVENTS_LOG, "w").close()
-
     if not dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         sys.exit("[pipeline] ANTHROPIC_API_KEY is not set. Add it to .env or use --dry-run.")
 
     engine = engine or TriggerEngine()
     video_name = os.path.basename(video_path)
+    camera_id = camera_for(video_path)
     print(f"[pipeline] scanning {video_name} for candidate events")
 
     trigger_events = engine.scan_video(video_path)
@@ -102,22 +108,19 @@ def run(video_path: str, engine: TriggerEngine | None = None, dry_run: bool = Fa
         judgment = judge_event(frames, event.reason)
 
         alert = is_alert(judgment)
-        record = {
-            "event_id": event_id,
-            "video": video_name,
-            "start_time": event.start_time_sec,
-            "end_time": event.end_time_sec,
-            "frames": frame_paths,
-            "judgment": judgment,
-            "peak_motion": event.peak_motion,
-            "person_count": event.person_count_at_peak,
-            "trigger_reason": event.reason,
-            "alert": alert,
-            "review": "pending",
-            "created_at": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
-        }
-
-        append_event_log(record)
+        repository.insert_event(
+            event_id,
+            judgment=judgment,
+            frames=frame_paths,
+            video=video_name,
+            camera_id=camera_id,
+            start_time=event.start_time_sec,
+            end_time=event.end_time_sec,
+            trigger_reason=event.reason,
+            peak_motion=event.peak_motion,
+            person_count=event.person_count_at_peak,
+            alert=alert,
+        )
 
         category = judgment.get("category", "unknown")
         confidence = judgment.get("confidence", 0.0)
@@ -127,7 +130,7 @@ def run(video_path: str, engine: TriggerEngine | None = None, dry_run: bool = Fa
             print(f"[pipeline]   -> judge error: {judgment['error']}: {judgment.get('reasoning', '')}")
 
     if not dry_run:
-        print(f"[pipeline] events saved to {config.EVENTS_LOG}")
+        print(f"[pipeline] events saved to {repository.db.DB_PATH}")
         print("[pipeline] review them in the dashboard: python -m dashboard.app")
 
     return trigger_events
