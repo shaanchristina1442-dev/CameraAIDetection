@@ -9,6 +9,7 @@ which is the cheap way to tune thresholds on new store footage.
 """
 import os
 import sys
+import uuid
 import cv2
 import json
 import time
@@ -79,7 +80,9 @@ def run(video_path: str, engine: TriggerEngine | None = None, dry_run: bool = Fa
     print(f"[pipeline] {len(trigger_events)} candidate event(s) found")
 
     for idx, event in enumerate(trigger_events):
-        event_id = f"{int(time.time())}_{idx}"
+        # timestamp keeps ids sorting chronologically; the random suffix stops
+        # two clips processed in the same second from overwriting each other
+        event_id = f"{int(time.time())}_{uuid.uuid4().hex[:8]}"
         print(f"[pipeline] event {idx + 1}: {fmt_time(event.start_time_sec)} - {fmt_time(event.end_time_sec)} "
               f"({event.reason}, {event.person_count_at_peak} people, motion {event.peak_motion:.3f})")
 
