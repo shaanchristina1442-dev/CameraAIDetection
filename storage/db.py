@@ -45,11 +45,32 @@ def session(path: str = None):
         conn.close()
 
 
+# Columns added after the first release. CREATE TABLE IF NOT EXISTS will not
+# add a column to a table that already exists, so new ones go here and are
+# applied on every start. Additive only - anything that drops or rewrites a
+# column needs a real migration, not this.
+ADDED_COLUMNS = [
+    ("events", "suppressed_reason", "TEXT"),
+]
+
+
+def _apply_added_columns(conn) -> list[str]:
+    applied = []
+    for table, column, decl in ADDED_COLUMNS:
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if existing and column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            applied.append(f"{table}.{column}")
+    return applied
+
+
 def init_db(path: str = None) -> str:
-    """Create the schema if absent. Safe to call on every start."""
+    """Create the schema if absent and apply additive migrations. Idempotent."""
     target = path or DB_PATH
     with open(SCHEMA_PATH) as f:
         schema = f.read()
     with session(target) as conn:
         conn.executescript(schema)
+        for col in _apply_added_columns(conn):
+            print(f"[db] added column {col}")
     return target

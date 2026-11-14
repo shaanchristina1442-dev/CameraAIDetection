@@ -51,7 +51,7 @@ def insert_event(event_id: str, judgment: dict, frames: list[str], *,
                  start_time: float = 0.0, end_time: float = 0.0,
                  trigger_reason: str = None, peak_motion: float = None,
                  person_count: int = None, alert: bool = False,
-                 created_at: str = None) -> str:
+                 created_at: str = None, suppressed_reason: str = None) -> str:
     """Record one judged event and its frames."""
     with db.session() as conn:
         conn.execute("""
@@ -59,15 +59,16 @@ def insert_event(event_id: str, judgment: dict, frames: list[str], *,
                 event_id, camera_id, video, start_time, end_time, trigger_reason,
                 peak_motion, person_count, category, confidence,
                 visible_description, reasoning, recommend_human_review,
-                judge_error, alert, created_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                judge_error, suppressed_reason, alert, created_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             event_id, camera_id, video, start_time, end_time, trigger_reason,
             peak_motion, person_count,
             judgment.get("category"), judgment.get("confidence"),
             judgment.get("visible_description"), judgment.get("reasoning"),
             1 if judgment.get("recommend_human_review") else 0,
-            judgment.get("error"), 1 if alert else 0, created_at or _now(),
+            judgment.get("error"), suppressed_reason,
+            1 if alert else 0, created_at or _now(),
         ))
         conn.executemany(
             "INSERT INTO event_frames (event_id, idx, path) VALUES (?,?,?)",
@@ -98,6 +99,7 @@ def _row_to_event(row, frames: list[str], review: str) -> dict:
         "person_count": row["person_count"],
         "trigger_reason": row["trigger_reason"],
         "alert": bool(row["alert"]),
+        "suppressed_reason": row["suppressed_reason"],
         "review": review,
         "created_at": row["created_at"],
     }
@@ -127,10 +129,17 @@ def _reviews_for(conn, event_ids: list[str]) -> dict:
 
 
 def list_events(limit: int = None, camera_id: str = None,
-                alerts_only: bool = False) -> list[dict]:
-    """Newest first."""
+                alerts_only: bool = False,
+                include_suppressed: bool = False) -> list[dict]:
+    """
+    Newest first. Suppressed events are recorded but hidden by default: they
+    were deliberately not judged, so showing them as unclassified rows would
+    bury the ones that were.
+    """
     sql = "SELECT * FROM events"
     where, params = [], []
+    if not include_suppressed:
+        where.append("suppressed_reason IS NULL")
     if camera_id:
         where.append("camera_id = ?"); params.append(camera_id)
     if alerts_only:
