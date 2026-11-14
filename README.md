@@ -22,10 +22,17 @@ sample_clips/
   seed_mock_events.py      # write fake rows into events.jsonl (no YOLO/Claude)
 
 footage/             # drop store footage here (git-ignored)
+storage/
+  schema.sql         # tables: cameras, events, event_frames, reviews
+  db.py              # connections, WAL mode, schema init
+  repository.py      # the only place that touches SQL
+
+scripts/
+  migrate_jsonl_to_sqlite.py   # one-off: old events.jsonl -> database
+
 events/
-  events.jsonl       # append-only log of judged events
+  store_monitor.db   # SQLite database (git-ignored)
   clips/             # saved frames for each event (git-ignored)
-  reviews.json       # reviewer confirm/dismiss decisions (git-ignored)
 ```
 
 ## Setup
@@ -61,6 +68,13 @@ python -m pipeline.watcher
 
 Remove the mock events again with `python sample_clips/seed_mock_events.py --clear`.
 
+If you have an `events/events.jsonl` from before the database existed:
+
+```bash
+python scripts/migrate_jsonl_to_sqlite.py --dry-run   # see what it would do
+python scripts/migrate_jsonl_to_sqlite.py
+```
+
 ## Testing on store footage
 
 - Export clips as `.mp4`/`.avi`/`.mov`/`.mkv`. Proprietary DVR formats (`.dav`,
@@ -84,8 +98,13 @@ Remove the mock events again with `python sample_clips/seed_mock_events.py --cle
    calls `judge.py`.
 3. `judge.py` asks Claude to describe and classify the frames into one of the
    categories in `config.DETECTION_CATEGORIES`, with a confidence score.
+   Frames are cropped around the people the trigger found, so the detail that
+   decides the category is not lost to downscaling.
 4. Events that aren't `nothing_notable` and meet `ALERT_CONFIDENCE_FLOOR` are
-   marked as alerts. The dashboard shows them for a human to confirm or dismiss.
+   marked as alerts, and everything is written to the SQLite database through
+   `storage/repository.py`. The dashboard shows them for a human to confirm or
+   dismiss; review decisions are appended, never overwritten, so the record of
+   who decided what survives.
 
 This is a human-in-the-loop review tool: every result is "worth a look", not a
 confirmed incident.

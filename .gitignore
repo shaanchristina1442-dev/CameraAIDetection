@@ -9,3 +9,7 @@ events/reviews.json
 # pipeline output: regenerated on every run, and a guaranteed
 # merge conflict whenever two people run the pipeline
 events/events.jsonl
+# runtime database (and its WAL sidecars)
+events/*.db
+events/*.db-wal
+events/*.db-shm

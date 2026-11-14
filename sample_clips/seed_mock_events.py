@@ -1,22 +1,26 @@
 """
-Write a few fake events into events/events.jsonl so the dashboard can be
-checked without running YOLO or calling Claude.
+Write a few fake events into the database so the dashboard can be checked
+without running YOLO or calling Claude.
 
 Usage:
-    python sample_clips/seed_mock_events.py          # append mock events
-    python sample_clips/seed_mock_events.py --clear  # remove mock events and exit
+    python sample_clips/seed_mock_events.py          # add mock events
+    python sample_clips/seed_mock_events.py --clear  # remove them and exit
 """
 import glob
-import json
 import os
 import sys
 import time
+import uuid
 
 import cv2
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from pipeline import config  # noqa: E402
+from pipeline import config          # noqa: E402
+from storage import repository       # noqa: E402
+
+MOCK_PREFIX = "mock_"
+MOCK_CAMERA = "file:mock_store_cam"
 
 MOCKS = [
     ("theft_concealment", 0.82, 2, "person present + high motion energy",
@@ -41,60 +45,50 @@ def placeholder_frame(label: str, i: int):
     return img
 
 
+def clear():
+    ids = repository.event_ids_with_prefix(MOCK_PREFIX)
+    for event_id in ids:
+        repository.delete_event(event_id)
+    frames = glob.glob(os.path.join(config.CLIPS_DIR, f"{MOCK_PREFIX}*.jpg"))
+    for path in frames:
+        os.remove(path)
+    print(f"removed {len(ids)} mock event(s) and {len(frames)} frame(s)")
+
+
 def main():
     os.makedirs(config.CLIPS_DIR, exist_ok=True)
+    repository.init()
 
     if "--clear" in sys.argv:
-        # remove and stop. Previously this stripped the old mock rows and then
-        # fell through to the append below, re-seeding them with new timestamps,
-        # so it looked like clearing had done nothing.
-        removed = 0
-        if os.path.exists(config.EVENTS_LOG):
-            with open(config.EVENTS_LOG) as f:
-                lines = f.readlines()
-            keep = [line for line in lines if '"mock": true' not in line]
-            removed = len(lines) - len(keep)
-            with open(config.EVENTS_LOG, "w") as f:
-                f.writelines(keep)
-        for path in glob.glob(os.path.join(config.CLIPS_DIR, "mock_*.jpg")):
-            os.remove(path)
-        print(f"removed {removed} mock event(s) and their frames")
+        clear()
         return
 
-    now = int(time.time())
-    with open(config.EVENTS_LOG, "a") as log:
-        for idx, (category, conf, people, reason, desc, why) in enumerate(MOCKS):
-            event_id = f"mock_{now}_{idx}"
-            frames = []
-            for i in range(3):
-                name = f"{event_id}_frame{i}.jpg"
-                cv2.imwrite(os.path.join(config.CLIPS_DIR, name), placeholder_frame(category, i))
-                frames.append(f"clips/{name}")
-            start = 30.0 + idx * 95
-            record = {
-                "event_id": event_id,
-                "video": "mock_store_cam.mp4",
-                "start_time": start,
-                "end_time": start + 8,
-                "frames": frames,
-                "judgment": {
-                    "category": category,
-                    "confidence": conf,
-                    "visible_description": desc,
-                    "reasoning": why,
-                    "recommend_human_review": category != "nothing_notable",
-                },
-                "peak_motion": 0.05,
-                "person_count": people,
-                "trigger_reason": reason,
-                "alert": category != "nothing_notable" and conf >= config.ALERT_CONFIDENCE_FLOOR,
-                "review": "pending",
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "mock": True,
-            }
-            log.write(json.dumps(record) + "\n")
+    repository.ensure_camera(MOCK_CAMERA, name="mock_store_cam.mp4", source="mock")
+    for idx, (category, conf, people, reason, desc, why) in enumerate(MOCKS):
+        event_id = f"{MOCK_PREFIX}{uuid.uuid4().hex[:8]}"
+        frames = []
+        for i in range(3):
+            name = f"{event_id}_frame{i}.jpg"
+            cv2.imwrite(os.path.join(config.CLIPS_DIR, name), placeholder_frame(category, i))
+            frames.append(f"clips/{name}")
+        start = 30.0 + idx * 95
+        repository.insert_event(
+            event_id,
+            judgment={
+                "category": category, "confidence": conf,
+                "visible_description": desc, "reasoning": why,
+                "recommend_human_review": category != "nothing_notable",
+            },
+            frames=frames,
+            video="mock_store_cam.mp4",
+            camera_id=MOCK_CAMERA,
+            start_time=start, end_time=start + 8,
+            trigger_reason=reason, peak_motion=0.05, person_count=people,
+            alert=category != "nothing_notable" and conf >= config.ALERT_CONFIDENCE_FLOOR,
+            created_at=time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
 
-    print(f"seeded {len(MOCKS)} mock events into {config.EVENTS_LOG}")
+    print(f"seeded {len(MOCKS)} mock events into {repository.db.DB_PATH}")
 
 
 if __name__ == "__main__":
