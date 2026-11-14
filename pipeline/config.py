@@ -30,6 +30,13 @@ FRAME_SKIP = int(os.environ.get("FRAME_SKIP", 5))
 # Confidence threshold for YOLO person/object detections
 YOLO_CONF_THRESHOLD = 0.45
  
+# Tracker config shipped with ultralytics. ByteTrack gives each person a
+# stable id while they stay visible, which is what lets the judge suppress
+# repeat alerts about one person loitering. Ids are per-camera and are
+# discarded when the person leaves - nothing is ever persisted against an
+# individual.
+TRACKER = os.environ.get("TRACKER", "bytetrack.yaml")
+
 # Classes from the COCO dataset (what the pretrained YOLO model knows)
 # that are relevant triggers. "person" is the main one we care about;
 # others help us reason about hand-near-object events.
@@ -64,6 +71,51 @@ CLIP_PADDING_SECONDS = 2
 FRAMES_PER_JUDGMENT = 5
  
  
+# --- Live pipeline (capture / trigger / judge workers) ---
+
+# Seconds of recent frames each capture worker keeps in memory. When a trigger
+# fires, the judge reaches BACKWARDS into this. A file can be seeked; a camera
+# cannot, and for concealment the informative footage is almost always just
+# before the motion spike. Frames are held JPEG-encoded (~250 KB at 1080p),
+# so 30s at the sampled rate costs tens of megabytes, not gigabytes.
+PREROLL_SECONDS = float(os.environ.get("PREROLL_SECONDS", 30))
+RING_JPEG_QUALITY = 85
+
+# Bounded so a slow consumer cannot grow memory without limit. The capture
+# worker DROPS rather than blocks when the trigger falls behind: a camera does
+# not wait, so the only options are drop a frame or fall further behind, and
+# falling behind is worse.
+CAPTURE_QUEUE_MAX = 8
+
+# How many pre-roll frames to include in a judgment. They carry no bounding
+# boxes, so they are sent whole rather than cropped - which also answers the
+# tradeoff the model itself raised, that tight crops cost it scene context.
+PREROLL_FRAMES_IN_EVENT = int(os.environ.get("PREROLL_FRAMES_IN_EVENT", 2))
+JUDGE_QUEUE_MAX = 64
+
+# Claude calls are I/O-bound, so several can be in flight while the trigger
+# keeps working.
+JUDGE_WORKERS = int(os.environ.get("JUDGE_WORKERS", 2))
+
+
+# --- Alert suppression ---
+#
+# Alert fatigue is the failure mode that kills systems like this. Thirty
+# notifications a shift and the owner mutes it, and a muted system is worth
+# nothing however good the detection. Measured on real footage, the trigger
+# produced 86 events/hour - everything below exists to stop that reaching a
+# person as 86 interruptions.
+
+# Don't judge the same tracked person again within this window. Tracker ids
+# churn on low-resolution footage (one clip gave 21 ids for 5 people), so this
+# catches the clean cases and the camera-wide floor below catches the rest.
+DEDUP_TRACK_COOLDOWN_SECONDS = float(os.environ.get("DEDUP_TRACK_COOLDOWN_SECONDS", 120))
+
+# Hard floor between judged events on one camera, whoever is in frame. This is
+# the backstop against a busy scene burning money and attention.
+DEDUP_CAMERA_COOLDOWN_SECONDS = float(os.environ.get("DEDUP_CAMERA_COOLDOWN_SECONDS", 20))
+
+
 # --- Judgment layer (Claude vision) settings ---
  
 CLAUDE_MODEL = "claude-opus-5-5"

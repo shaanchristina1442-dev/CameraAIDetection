@@ -7,9 +7,16 @@ Prototype retail store monitoring system that watches for security events in vid
 ```
 pipeline/
   config.py          # thresholds, paths, Claude model; loads .env
-  trigger.py         # YOLO + motion scan: finds candidate events in a video
+  trigger.py         # motion + YOLO + tracking; StreamingTrigger is fed frames
   judge.py           # sends event frames to Claude, returns a classification
-  run_pipeline.py    # one clip: trigger -> judge -> events/events.jsonl
+  framebuffer.py     # rolling buffer of recent frames, so events can reach back
+  dedup.py           # decides what is worth judging; the alert-fatigue defence
+  supervisor.py      # starts the workers for a camera and keeps them alive
+  workers/
+    capture.py       # reads frames; never blocks on anything slow
+    trigger.py       # runs the trigger over captured frames
+    judge.py         # pool: suppress, crop, call Claude, record
+  run_pipeline.py    # one clip, as a thin entry point over the workers
   watcher.py         # watches footage/ and runs the pipeline on each new clip
 
 dashboard/
@@ -64,6 +71,10 @@ python -m pipeline.run_pipeline footage/store_cam.mp4
 
 # 4. Or leave the watcher running and copy clips into footage/
 python -m pipeline.watcher
+
+# 5. The same pipeline, driven directly (one camera, live or from a file)
+python -m pipeline.supervisor footage/store_cam.mp4
+python -m pipeline.supervisor footage/store_cam.mp4 --realtime   # paced to the clock
 ```
 
 Remove the mock events again with `python sample_clips/seed_mock_events.py --clear`.
@@ -88,6 +99,25 @@ python scripts/migrate_jsonl_to_sqlite.py
   something moves; busy footage runs at roughly real time or slower on a laptop
   CPU. Raise `FRAME_SKIP` (e.g. 10) to go faster.
 - All of these can be set in `.env` without editing code.
+
+## Architecture
+
+    capture  ->  trigger  ->  judge pool  ->  SQLite
+             queue      queue
+
+Reading a file is forgiving: a slow Claude call just makes the loop wait, and
+the file waits with it. A camera does not wait - it produces frames whether or
+not anything is ready, so a loop that blocks on inference drops frames or
+falls further behind every shift. Capture therefore never blocks on anything
+slow, and keeps a rolling buffer of recent frames so an event can reach
+*backwards* in time; for concealment the informative footage is usually just
+before the motion that fired the trigger.
+
+A file and a camera run the same code with different sources. `--realtime`
+paces capture to the source's frame rate and keeps running; without it a file
+is scanned as fast as it decodes, applying backpressure rather than dropping
+frames, because dropping from a file means scanning something other than the
+footage.
 
 ## How it works
 
